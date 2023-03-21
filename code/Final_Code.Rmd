@@ -1,0 +1,414 @@
+---
+title: "Final_Code"
+author: "Yue Cao"
+date: "12/4/2017"
+output: html_document
+---
+##Load data
+```{r}
+library(dplyr)
+library(psych)
+library(lmtest)
+setwd("~/Desktop/statistical consulting/assignment/final project")
+parkin = read.csv("./data/Liana_PD\ project.csv")
+# 2961
+parkin = filter(parkin, RequiredFieldsSiteName != "University of Florida (Gainesville)") %>% filter(visit == 0) %>% filter(NeuroExamPrimaryDiagnos %in% c("Control", "Parkinson's disease"))
+# 1335
+colnames(parkin)
+pa = parkin[,c(2, 9, 10, 13,14, 15, 16, 17, 21:29)] # include duration 
+```
+
+##Check data
+```{r}
+summary(pa$duration) #670 missing values
+pa$duration[which(pa$NeuroExamPrimaryDiagnos == "Control")] <- 0
+pa <- pa[which(pa$duration >= 0 | is.na(pa$duration)),] # remove negative duration obs
+
+summary(pa$duration) # 167 missing values
+sum(pa$NeuroExamPrimaryDiagnos == "Parkinson's disease") # 830 PD, 20% missing values 
+hist(pa$duration[pa$NeuroExamPrimaryDiagnos == "Parkinson's disease"], breaks = 40) 
+
+#check if duration is missing at random in the case group
+casegroup <- pa[pa$NeuroExamPrimaryDiagnos== "Parkinson's disease",]
+summary(casegroup$duration) # why duration < 0??
+casegroup$duration[which(casegroup$duration<0)] <- 0
+durationmissing <- ifelse(!is.na(casegroup$duration), 1, 0)
+fit1 <- glm(durationmissing ~ casegroup$MOCA_Total, family = "binomial")
+summary(fit1) # the missing of duration is related to the MOCA score
+
+
+```
+
+##Descriptive data analysis
+```{r}
+######### divide groups by MOca score, under complete cases ######
+p = parkin[,c(2, 9, 10, 14, 15, 16, 17, 21:29)] # not include duration
+p = p[complete.cases(p),] #1177 obs
+p = filter(p, p$Hgtcm > 100)  #1171obs
+# combine education categories
+p$edu[p$edu=="1"] <- "2"
+p$edu <- factor(p$edu)
+# calculate BMI
+p$BMI = p$Wgtkg/(p$Hgtcm/100)^2
+
+p1 <- p[which(p$MOCA_Total <= 19),]
+p2 <- p[which(p$MOCA_Total >= 20 & p$MOCA_Total < 26),]
+p3 <- p[which(p$MOCA_Total >= 26),]
+
+## check BMI
+plot(p$BMI,p$MOCA_Total)
+summary(p1$BMI)
+summary(p2$BMI)
+summary(p3$BMI)
+
+##continuous normal: age, height, weight, sbp, dbp, depression score, motor score, moka
+describe(p1$Age)
+describe(p2$Age)
+describe(p3$Age)
+ 
+
+# categorical: diagnos, gender, race, edu, smoke, med, diabetes
+#proportion
+table(p1$NeuroExamPrimaryDiagnos)/nrow(p1)
+
+
+
+
+# continuous normal: age, height, weight, sbp, dbp
+# continous skew: depression score, motor score, moka
+hist(p$Age)
+summary(p$Age)
+hist(p$HDRSTotScore)
+hist(p$MotorExamination_PartIIIScore)
+summary(p$Hgtcm)
+p = filter(p, p$Hgtcm > 100)
+# 1171
+hist(p$Hgtcm)
+hist(p$Wgtkg)
+hist(p$avg_SBP)
+hist(p$avg_DBP)
+hist(p$MOCA_Total)
+
+summary(p$duration)
+# categorical: diagnos, gender, race, edu, smoke, med, diabetes
+
+
+```
+
+## Calculate Framingham Score
+```{r}
+
+X.raw = p[,c(4, 14, 2, 12, 7, 17, 15)]
+Fram <- function(X.raw){
+  Framingham <- rep(NA, nrow(X.raw))
+  for(i in 1:nrow(X.raw)){
+    X <- X.raw[i,]
+    X$Age = log(X.raw[i,]$Age)
+    X$avg_SBP = log(X.raw[i,]$avg_SBP)
+    X$BMI = log(X.raw[i,]$BMI)
+    
+    beta.male = data.frame(Age = 3.11, avg_SBP.NoTRT = 1.85, avg_SBP.TRT = 1.93,
+                           Smoke_Ever = 0.71, BMI = 0.79, diabetes = 0.53)
+    beta.female = data.frame(Age = 2.72, avg_SBP.NoTRT = 2.81, avg_SBP.TRT = 2.88,
+                             Smoke_Ever = 0.62, BMI = 0.51, diabetes = 0.78)
+    
+    if (X$Gender == 0) {
+      Xbeta = sum(X[, c('Age', 'Smoke_Ever', 'BMI', 'diabetes')] *
+                    beta.male[, c('Age', 'Smoke_Ever', 'BMI', 'diabetes')])
+      if (X$HTN_meds > 0) {
+        Xbeta = Xbeta + X$avg_SBP * beta.male$avg_SBP.TRT
+      } else {
+        Xbeta = Xbeta + X$avg_SBP * beta.male$avg_SBP.NoTRT
+      }
+      Framingham[i] = 1 - 0.88431 ^ exp(Xbeta - 23.9388)
+    } else {
+      Xbeta = sum(X[, c('Age', 'Smoke_Ever', 'BMI', 'diabetes')] *
+                    beta.female[, c('Age', 'Smoke_Ever', 'BMI', 'diabetes')])
+      if (X$HTN_meds > 0) {
+        Xbeta = Xbeta + X$avg_SBP * beta.female$avg_SBP.TRT
+      } else {
+        Xbeta = Xbeta + X$avg_SBP * beta.female$avg_SBP.NoTRT
+      }
+      Framingham[i] = 1 - 0.94833 ^ exp(Xbeta - 26.0145)
+    }
+  }
+  return(Framingham)
+}
+
+p$framing = Fram(X.raw)
+
+#rescale framingham score
+p$framing <- 10* p$framing
+
+
+
+```
+
+### Explore linearity between dependent variables and the independent variable
+```{r}
+# age, height, weight, sbp, dbp
+# depression score, motor score, moka
+#aim 1
+linearity <-  function(x, y){
+loess1 <- loess( y ~ x , span=0.10) # 10% smoothing span
+smoothed1<- predict(loess1) 
+plot( x, y, type="p" )
+lines(x, smoothed1, col="red")
+}
+p <- p %>% arrange(MOCA_Total)
+linearity(p$MOCA_Total, p$framing)
+
+
+linearity(p$MOCA_Total, p$MotorExamination_PartIIIScore)
+
+linearity(p$MOCA_Total, p$HDRSTotScore)
+
+# aim 2
+linearity(p$MOCA_Total, p$avg_SBP)
+
+linearity(p$MOCA_Total, p$avg_DBP)
+
+linearity(p$MOCA_Total, p$Age)
+
+linearity(p$MOCA_Total, p$BMI)
+
+```
+
+   
+###Check Collinearity
+```{r}
+#continuous variables:  
+  # continuous normal: age, height, weight, sbp, dbp
+  # continous skew: depression score, motor score
+checkcoll <- p
+
+collinearity <- function(x, y){
+loess1 <- loess( y ~ x , span=0.10) # 10% smoothing span
+smoothed1<- predict(loess1) 
+plot( x, y, type="l" )
+lines(x, smoothed1, col="red")
+}
+```
+#### Aim 1: Framingham Scores, PD/control, education, motor impairment score, Hamilton Depression Scale
+
+```{r}
+# framing with motor score
+checkcoll$framing100 <- checkcoll$framing * 100 # rescale the framing score
+checkcoll <- checkcoll %>% arrange(framing100)
+collinearity(checkcoll$MotorExamination_PartIIIScore, checkcoll$framing100)
+fit <- lm(MotorExamination_PartIIIScore ~ framing100 , data = checkcoll) #significant
+summary(fit)
+
+# framing with Hamilton Depression Rating Total Score
+collinearity(checkcoll$framing100, checkcoll$HDRSTotScore)
+fit <- lm(HDRSTotScore ~ framing100 , data = checkcoll) 
+summary(fit)
+
+
+# motor impairment score with Hamilton Depression Score
+checkcoll <- checkcoll %>% arrange(MotorExamination_PartIIIScore)
+collinearity( checkcoll$MotorExamination_PartIIIScore, checkcoll$HDRSTotScore)
+fit <- lm(HDRSTotScore ~ MotorExamination_PartIIIScore , data = checkcoll) #significant?
+summary(fit)
+```
+
+
+#### Aim 2: average SBP, average DBP, BMI, ever smoke, diabetes, hypertension medication, age, PD/control, gender, education, motor impairment score, Hamilton Depression Scale
+```{r}
+# 1.
+#SBP with BMI
+checkcoll <- checkcoll %>% arrange(BMI)
+collinearity(checkcoll$BMI, checkcoll$avg_SBP) 
+fit <- lm(avg_SBP ~ BMI , data = checkcoll) #significant
+summary(fit)
+
+#DBP with BMI
+collinearity(checkcoll$BMI, checkcoll$avg_DBP) 
+fit <- lm(avg_SBP ~ BMI , data = checkcoll) #significant
+summary(fit)
+
+#age with BMI
+collinearity(checkcoll$BMI, checkcoll$Age) 
+fit <- lm(Age ~ BMI , data = checkcoll) #significant
+summary(fit)
+
+# moter impairment score with BMI
+collinearity(checkcoll$BMI, checkcoll$MotorExamination_PartIIIScore)
+fit <- lm( MotorExamination_PartIIIScore~ BMI , data = checkcoll)
+summary(fit)
+
+
+#Hamilton Depression Score with BMI
+collinearity(checkcoll$BMI, checkcoll$HDRSTotScore)
+fit <- lm( HDRSTotScore ~ BMI , data = checkcoll)
+summary(fit)
+
+# 2.
+## DBP with SBP
+checkcoll <- checkcoll %>% arrange(avg_SBP)
+collinearity(checkcoll$avg_SBP, checkcoll$avg_DBP)
+fit <- lm(avg_DBP ~ avg_SBP, data = checkcoll) #significant
+summary(fit)
+
+# age with SBP
+collinearity(checkcoll$avg_SBP, checkcoll$Age)
+fit <- lm(Age ~ avg_SBP, data = checkcoll) #significant
+summary(fit)
+
+## moter impairment score with SBP
+collinearity(checkcoll$avg_SBP, checkcoll$MotorExamination_PartIIIScore)
+fit <- lm(MotorExamination_PartIIIScore ~ avg_SBP, data = checkcoll)
+summary(fit)
+
+#Hamilton Depression Score with SBP
+collinearity(checkcoll$avg_SBP, checkcoll$HDRSTotScore)
+fit <- lm( HDRSTotScore~ avg_SBP, data = checkcoll)
+summary(fit)
+
+# 3.
+## age with DBP
+checkcoll <- checkcoll %>% arrange(avg_DBP)
+collinearity(checkcoll$avg_DBP, checkcoll$Age)
+fit <- lm( Age~ avg_DBP, data = checkcoll) #significant
+summary(fit)
+
+# moter impairment score with DBP
+collinearity(checkcoll$avg_DBP, checkcoll$MotorExamination_PartIIIScore)
+fit <- lm(MotorExamination_PartIIIScore ~ avg_DBP, data = checkcoll) #significant
+summary(fit)
+
+#Hamilton Depression Score with DBP
+collinearity(checkcoll$avg_DBP, checkcoll$HDRSTotScore)
+fit <- lm(HDRSTotScore ~avg_DBP, data = checkcoll) 
+summary(fit)
+
+# 4.
+checkcoll <- checkcoll %>% arrange(Age)
+# moter impairment score with age
+collinearity( checkcoll$Age, checkcoll$MotorExamination_PartIIIScore)
+fit <- lm(HDRSTotScore ~ Age, data = checkcoll) 
+summary(fit)
+
+#Hamilton Depression Score with age
+collinearity(checkcoll$Age, checkcoll$HDRSTotScore)
+
+
+```
+
+##Regression Analysis
+
+###Aim 1: find out whether individuals with high Framingham score have greater cognitive impairment reflected by MoCA score in PD and control group.
+predictor: Framingham Scores, PD/control, education, motor impairment score, Hamilton Depression Score
+
+
+
+```{r}
+
+fit5 <- lm(MOCA_Total ~ framing  + NeuroExamPrimaryDiagnos  + factor(edu) + MotorExamination_PartIIIScore  + HDRSTotScore , data = p) 
+summary(fit5)
+
+
+fit4 <- lm(MOCA_Total ~ framing  + NeuroExamPrimaryDiagnos  + factor(edu) + MotorExamination_PartIIIScore, data = p) 
+summary(fit4)
+lrtest(fit5, fit4)
+
+fit3 <- lm(MOCA_Total ~ framing  + NeuroExamPrimaryDiagnos + factor(edu) , data = p) 
+summary(fit3)
+lrtest(fit5, fit3) 
+
+fit2 <- lm(MOCA_Total ~ framing + NeuroExamPrimaryDiagnos , data = p)
+summary(fit2)
+lrtest(fit5, fit2) # likelihood ratio test
+
+fit1 <- lm(MOCA_Total ~ framing, data = p)
+summary(fit1)
+lrtest(fit5, fit1)
+#final model is fit5 
+
+##### consider possible interaction with motor score
+fit6 <- lm(MOCA_Total ~ framing *MotorExamination_PartIIIScore  + NeuroExamPrimaryDiagnos  + factor(edu)  + HDRSTotScore , data = p) 
+summary(fit6)
+lrtest(fit5, fit6) # no significance 
+
+fit7 <- lm(MOCA_Total ~ framing  + NeuroExamPrimaryDiagnos *MotorExamination_PartIIIScore   + factor(edu)  + HDRSTotScore , data = p) 
+summary(fit7)
+lrtest(fit5, fit7) # no significance 
+
+fit8 <- lm(MOCA_Total ~ framing  + NeuroExamPrimaryDiagnos  + factor(edu) * MotorExamination_PartIIIScore  + HDRSTotScore , data = p) 
+summary(fit8)
+lrtest(fit5, fit8) # no significance 
+
+fit9 <- lm(MOCA_Total ~ framing  + NeuroExamPrimaryDiagnos  + factor(edu) + HDRSTotScore * MotorExamination_PartIIIScore , data = p) 
+summary(fit9)
+lrtest(fit5, fit9) #significant? interaction coefficient too small.
+
+######### consider possible interaction with PD/Control
+fit10<- lm(MOCA_Total ~  framing * NeuroExamPrimaryDiagnos + factor(edu) + MotorExamination_PartIIIScore + HDRSTotScore, data = p) 
+summary(fit10)
+lrtest(fit5, fit10) # no significance
+
+fit11<- lm(MOCA_Total ~  framing  + factor(edu) * NeuroExamPrimaryDiagnos+ MotorExamination_PartIIIScore + HDRSTotScore, data = p) 
+summary(fit11)
+lrtest(fit5, fit11)#significant
+
+
+fit12<- lm(MOCA_Total ~  framing  + factor(edu)+ MotorExamination_PartIIIScore + HDRSTotScore * NeuroExamPrimaryDiagnos, data = p) 
+summary(fit12)
+lrtest(fit5, fit12) # no significance
+
+######### consider possible interaction with edu
+fit13<- lm(MOCA_Total ~  framing  * factor(edu)+ MotorExamination_PartIIIScore + HDRSTotScore + NeuroExamPrimaryDiagnos, data = p) 
+summary(fit13)
+lrtest(fit5, fit13)# no significance
+
+fit14<- lm(MOCA_Total ~  framing + NeuroExamPrimaryDiagnos  + MotorExamination_PartIIIScore  + HDRSTotScore * factor(edu) , data = p) 
+summary(fit14)
+lrtest(fit5, fit14) #no significance
+
+######### consider possible interaction with Hamilton depression score
+fit15<- lm(MOCA_Total ~  framing * HDRSTotScore + NeuroExamPrimaryDiagnos + factor(edu) + MotorExamination_PartIIIScore , data = p) 
+summary(fit15)
+lrtest(fit5, fit15)  #no significance
+
+```
+
+###MODEL DIAGNOSIS
+
+```{r}
+par(mfrow=c(2,2))
+plot(fit5) #scale-location plot: violation of equal variance 
+plot(fit9)
+plot(fit11)
+# test for equal variance (Score Test For Non-Constant Error Variance)
+library(car)
+ncvTest(fit9)
+# pair-wise correlation
+library(GGally)
+ggpairs(X)  #the correlation between motor score and PD/Control is relatively high, 0.717
+
+# Farrar – Glauber Test  - con
+library(mctest)
+X <- p[,c(3,6,8,9,18)]
+X$NeuroExamPrimaryDiagnos <- ifelse(X$NeuroExamPrimaryDiagnos == "Control", 0, 1)
+#X$edu <- factor(X$edu)
+omcdiag(X,p$MOCA_Total)
+imcdiag(X,p$MOCA_Total, method="VIF")
+library(ppcor)
+pcor(X, method = "pearson")$p.value <= 0.05
+
+```
+###Aim 2: identify the relationship between vascular risk factors (hypertension, obesity and smoking) and cognitive impairment. 
+predictors: average SBP, average DBP, BMI, ever smoke, diabetes, hypertension medication, age, PD/control, gender, education, motor impairment score, Hamilton Depression Scale
+
+```{r}
+
+
+aim2fit1<- lm(MOCA_Total ~ avg_SBP + avg_DBP + BMI + factor(Smoke_Ever) + factor(diabetes) + factor(HTN_meds) + Age + NeuroExamPrimaryDiagnos  +  factor(Gender) + factor(edu) + HDRSTotScore + MotorExamination_PartIIIScore, data = p) #
+summary(aim2fit1)
+
+aim2fit2<- lm(MOCA_Total ~ avg_SBP + avg_DBP + factor(Smoke_Ever) + factor(diabetes) , data = p) #
+summary(aim2fit2)
+
+```
+
+
